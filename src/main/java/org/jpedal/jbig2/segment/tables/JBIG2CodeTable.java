@@ -2,7 +2,7 @@
 * ===========================================
 * Java Pdf Extraction Decoding Access Library
 * ===========================================
- *
+*
 * Project Info:  http://www.jpedal.org
 * (C) Copyright 1997-2008, IDRsolutions and Contributors.
 * Main Developer: Simon Barnett
@@ -46,12 +46,12 @@
 * ---------------
 * JBIG2CodeTable.java
 * ---------------
- */
+*/
 package org.jpedal.jbig2.segment.tables;
 
 public class JBIG2CodeTable {
 
-    public static int[][] getHuffTable() {
-        return null;
-    }
+	public static int[][] getHuffTable() {
+		return null;
+	}
 }

@@ -2,7 +2,7 @@
 * ===========================================
 * Java Pdf Extraction Decoding Access Library
 * ===========================================
- *
+*
 * Project Info:  http://www.jpedal.org
 * (C) Copyright 1997-2008, IDRsolutions and Contributors.
 * Main Developer: Simon Barnett
@@ -46,7 +46,7 @@
 * ---------------
 * PatternDictionaryFlags.java
 * ---------------
- */
+*/
 package org.jpedal.jbig2.segment.pattern;
 
 import org.jpedal.jbig2.decoders.JBIG2StreamDecoder;
@@ -54,19 +54,19 @@ import org.jpedal.jbig2.segment.Flags;
 
 public class PatternDictionaryFlags extends Flags {
 
-    public static String HD_MMR = "HD_MMR";
-    public static String HD_TEMPLATE = "HD_TEMPLATE";
+	public static String HD_MMR = "HD_MMR";
+	public static String HD_TEMPLATE = "HD_TEMPLATE";
 
-    public void setFlags(int flagsAsInt) {
-        this.flagsAsInt = flagsAsInt;
+	public void setFlags(int flagsAsInt) {
+		this.flagsAsInt = flagsAsInt;
 
-        /** extract HD_MMR */
-        flags.put(HD_MMR, new Integer(flagsAsInt & 1));
+		/** extract HD_MMR */
+		flags.put(HD_MMR, new Integer(flagsAsInt & 1));
 
-        /** extract HD_TEMPLATE */
-        flags.put(HD_TEMPLATE, new Integer((flagsAsInt >> 1) & 3));
+		/** extract HD_TEMPLATE */
+		flags.put(HD_TEMPLATE, new Integer((flagsAsInt >> 1) & 3));
 
-        if (JBIG2StreamDecoder.debug)
-            System.out.println(flags);
-    }
+		if (JBIG2StreamDecoder.debug)
+			System.out.println(flags);
+	}
 }

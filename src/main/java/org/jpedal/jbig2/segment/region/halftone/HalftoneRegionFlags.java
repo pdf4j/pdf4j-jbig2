@@ -2,7 +2,7 @@
 * ===========================================
 * Java Pdf Extraction Decoding Access Library
 * ===========================================
- *
+*
 * Project Info:  http://www.jpedal.org
 * (C) Copyright 1997-2008, IDRsolutions and Contributors.
 * Main Developer: Simon Barnett
@@ -46,7 +46,7 @@
 * ---------------
 * HalftoneRegionFlags.java
 * ---------------
- */
+*/
 package org.jpedal.jbig2.segment.region.halftone;
 
 import org.jpedal.jbig2.decoders.JBIG2StreamDecoder;
@@ -64,22 +64,22 @@ public class HalftoneRegionFlags extends Flags {
         this.flagsAsInt = flagsAsInt;
 
         /** extract H_MMR */
-        flags.put(H_MMR, new Integer(flagsAsInt & 1));
+		flags.put(H_MMR, new Integer(flagsAsInt & 1));
+		
+		/** extract H_TEMPLATE */
+		flags.put(H_TEMPLATE, new Integer((flagsAsInt >> 1) & 3));
+		
+		/** extract H_ENABLE_SKIP */
+		flags.put(H_ENABLE_SKIP, new Integer((flagsAsInt >> 3) & 1));
+		
+		/** extract H_COMB_OP */
+		flags.put(H_COMB_OP, new Integer((flagsAsInt >> 4) & 7));
+		
+		/** extract H_DEF_PIXEL */
+		flags.put(H_DEF_PIXEL, new Integer((flagsAsInt >> 7) & 1));
 
-        /** extract H_TEMPLATE */
-        flags.put(H_TEMPLATE, new Integer((flagsAsInt >> 1) & 3));
-
-        /** extract H_ENABLE_SKIP */
-        flags.put(H_ENABLE_SKIP, new Integer((flagsAsInt >> 3) & 1));
-
-        /** extract H_COMB_OP */
-        flags.put(H_COMB_OP, new Integer((flagsAsInt >> 4) & 7));
-
-        /** extract H_DEF_PIXEL */
-        flags.put(H_DEF_PIXEL, new Integer((flagsAsInt >> 7) & 1));
-
-
-        if (JBIG2StreamDecoder.debug)
-            System.out.println(flags);
+		
+		if(JBIG2StreamDecoder.debug)
+			System.out.println(flags);
     }
 }

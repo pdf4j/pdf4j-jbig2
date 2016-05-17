@@ -2,7 +2,7 @@
 * ===========================================
 * Java Pdf Extraction Decoding Access Library
 * ===========================================
- *
+*
 * Project Info:  http://www.jpedal.org
 * (C) Copyright 1997-2008, IDRsolutions and Contributors.
 * Main Developer: Simon Barnett
@@ -46,7 +46,7 @@
 * ---------------
 * RegionFlags.java
 * ---------------
- */
+*/
 package org.jpedal.jbig2.segment.region;
 
 import org.jpedal.jbig2.decoders.JBIG2StreamDecoder;
@@ -54,15 +54,15 @@ import org.jpedal.jbig2.segment.Flags;
 
 public class RegionFlags extends Flags {
 
-    public static String EXTERNAL_COMBINATION_OPERATOR = "EXTERNAL_COMBINATION_OPERATOR";
+	public static String EXTERNAL_COMBINATION_OPERATOR = "EXTERNAL_COMBINATION_OPERATOR";
 
-    public void setFlags(int flagsAsInt) {
-        this.flagsAsInt = flagsAsInt;
+	public void setFlags(int flagsAsInt) {
+		this.flagsAsInt = flagsAsInt;
 
-        /** extract EXTERNAL_COMBINATION_OPERATOR */
-        flags.put(EXTERNAL_COMBINATION_OPERATOR, new Integer(flagsAsInt & 7));
+		/** extract EXTERNAL_COMBINATION_OPERATOR */
+		flags.put(EXTERNAL_COMBINATION_OPERATOR, new Integer(flagsAsInt & 7));
 
-        if (JBIG2StreamDecoder.debug)
-            System.out.println(flags);
-    }
+		if (JBIG2StreamDecoder.debug)
+			System.out.println(flags);
+	}
 }

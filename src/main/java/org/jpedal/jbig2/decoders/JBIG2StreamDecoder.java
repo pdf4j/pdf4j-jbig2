@@ -3,7 +3,9 @@
  * Java Pdf Extraction Decoding Access Library
  * ===========================================
  *
- * Project Info:  http://www.jpedal.org
+ * Project Info:  http://www.idrsolutions.com
+ * Help section for developers at http://www.idrsolutions.com/java-pdf-library-support/
+ *
  * (C) Copyright 1997-2008, IDRsolutions and Contributors.
  * Main Developer: Simon Barnett
  *
@@ -37,9 +39,9 @@
  * Other JBIG2 image decoding implementations include
  * jbig2dec (http://jbig2dec.sourceforge.net/)
  * xpdf (http://www.foolabs.com/xpdf/)
- *
+ * 
  * The final draft JBIG2 specification can be found at http://www.jpeg.org/public/fcd14492.pdf
- *
+ * 
  * All three of the above resources were used in the writing of this software, with methodologies,
  * processes and inspiration taken from all three.
  *
@@ -48,6 +50,12 @@
  * ---------------
  */
 package org.jpedal.jbig2.decoders;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
 
 import org.jpedal.jbig2.JBIG2Exception;
 import org.jpedal.jbig2.image.JBIG2Bitmap;
@@ -65,643 +73,623 @@ import org.jpedal.jbig2.segment.stripes.EndOfStripeSegment;
 import org.jpedal.jbig2.segment.symboldictionary.SymbolDictionarySegment;
 import org.jpedal.jbig2.util.BinaryOperation;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
-
 public class JBIG2StreamDecoder {
 
-    private StreamReader reader;
+	private StreamReader reader;
+
+	private boolean noOfPagesKnown;
+	private boolean randomAccessOrganisation;
+
+	private int noOfPages = -1;
+
+	private List segments = new ArrayList();
+	private List bitmaps = new ArrayList();
+
+	private byte[] globalData;
+
+	private ArithmeticDecoder arithmeticDecoder;
+
+	private HuffmanDecoder huffmanDecoder;
+
+	private MMRDecoder mmrDecoder;
+	
+	public static boolean debug = false;
+
+	public void movePointer(int i){
+		reader.movePointer(i);
+	}
+	
+	public void setGlobalData(final byte[] data) {
+		globalData = data;
+	}
+
+	public void decodeJBIG2(final byte[] data) throws IOException, JBIG2Exception {
+		reader = new StreamReader(data);
+
+		resetDecoder();
+
+		boolean validFile = checkHeader();
+		if (JBIG2StreamDecoder.debug)
+			System.out.println("validFile = " + validFile);
+
+		if (!validFile) {
+			/**
+			 * Assume this is a stream from a PDF so there is no file header,
+			 * end of page segments, or end of file segments. Organisation must
+			 * be sequential, and the number of pages is assumed to be 1.
+			 */
+
+			noOfPagesKnown = true;
+			randomAccessOrganisation = false;
+			noOfPages = 1;
+
+			/** check to see if there is any global data to be read */
+			if (globalData != null) {
+				/** set the reader to read from the global data */
+				reader = new StreamReader(globalData);
+
+				huffmanDecoder = new HuffmanDecoder(reader);
+				mmrDecoder = new MMRDecoder(reader);
+				arithmeticDecoder = new ArithmeticDecoder(reader);
+				
+				/** read in the global data segments */
+				readSegments();
+
+				/** set the reader back to the main data */
+				reader = new StreamReader(data);
+			} else {
+				/**
+				 * There's no global data, so move the file pointer back to the
+				 * start of the stream
+				 */
+				reader.movePointer(-8);
+			}
+		} else {
+			/**
+			 * We have the file header, so assume it is a valid stand-alone
+			 * file.
+			 */
 
-    private boolean noOfPagesKnown;
-    private boolean randomAccessOrganisation;
+			if (JBIG2StreamDecoder.debug)
+				System.out.println("==== File Header ====");
 
-    private int noOfPages = -1;
+			setFileHeaderFlags();
 
-    private List<Segment> segments = new ArrayList<Segment>();
-    private List<JBIG2Bitmap> bitmaps = new ArrayList<JBIG2Bitmap>();
+			if (JBIG2StreamDecoder.debug) {
+				System.out.println("randomAccessOrganisation = " + randomAccessOrganisation);
+				System.out.println("noOfPagesKnown = " + noOfPagesKnown);
+			}
 
-    private byte[] globalData;
+			if (noOfPagesKnown) {
+				noOfPages = getNoOfPages();
 
-    private ArithmeticDecoder arithmeticDecoder;
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("noOfPages = " + noOfPages);
+			}
+		}
 
-    private HuffmanDecoder huffmanDecoder;
+		huffmanDecoder = new HuffmanDecoder(reader);
+		mmrDecoder = new MMRDecoder(reader);
+		arithmeticDecoder = new ArithmeticDecoder(reader);
+		
+		/** read in the main segment data */
+		readSegments();
+	}
+	
+	public HuffmanDecoder getHuffmanDecoder() {
+		return huffmanDecoder;
+	}
+	
+	public MMRDecoder getMMRDecoder() {
+		return mmrDecoder;
+	}
+	
+	public ArithmeticDecoder getArithmeticDecoder() {
+		return arithmeticDecoder;
+	}
+	
+	private void resetDecoder() {
+		noOfPagesKnown = false;
+		randomAccessOrganisation = false;
 
-    private MMRDecoder mmrDecoder;
+		noOfPages = -1;
 
-    public static boolean debug = false;
+		segments.clear();
+		bitmaps.clear();
+	}
 
-    public void movePointer(int i) {
-        reader.movePointer(i);
-    }
+	private void readSegments() throws IOException, JBIG2Exception {
 
-    public void setGlobalData(byte[] data) {
-        globalData = data;
-    }
+		if (JBIG2StreamDecoder.debug)
+			System.out.println("==== Segments ====");
 
-    public void decodeJBIG2(byte[] data) throws IOException, JBIG2Exception {
-        reader = new StreamReader(data);
+		boolean finished = false;
+		while (!reader.isFinished() && !finished) {
 
-        resetDecoder();
+			SegmentHeader segmentHeader = new SegmentHeader();
 
-        boolean validFile = checkHeader();
-        if (JBIG2StreamDecoder.debug)
-            System.out.println("validFile = " + validFile);
+			if (JBIG2StreamDecoder.debug)
+				System.out.println("==== Segment Header ====");
 
-        if (!validFile) {
-            /**
-             * Assume this is a stream from a PDF so there is no file header,
-             * end of page segments, or end of file segments. Organisation must
-             * be sequential, and the number of pages is assumed to be 1.
-             */
+			readSegmentHeader(segmentHeader);
 
-            noOfPagesKnown = true;
-            randomAccessOrganisation = false;
-            noOfPages = 1;
+			// read the Segment data
+			Segment segment = null;
 
-            /** check to see if there is any global data to be read */
-            if (globalData != null) {
-                /** set the reader to read from the global data */
-                reader = new StreamReader(globalData);
+			int segmentType = segmentHeader.getSegmentType();
+			int[] referredToSegments = segmentHeader.getReferredToSegments();
+			int noOfReferredToSegments = segmentHeader.getReferredToSegmentCount();
 
-                huffmanDecoder = new HuffmanDecoder(reader);
-                mmrDecoder = new MMRDecoder(reader);
-                arithmeticDecoder = new ArithmeticDecoder(reader);
+			switch (segmentType) {
+			case Segment.SYMBOL_DICTIONARY:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Segment Symbol Dictionary ====");
 
-                /** read in the global data segments */
-                readSegments();
+				segment = new SymbolDictionarySegment(this);
 
-                /** set the reader back to the main data */
-                reader = new StreamReader(data);
-            } else {
-                /**
-                 * There's no global data, so move the file pointer back to the
-                 * start of the stream
-                 */
-                reader.movePointer(-8);
-            }
-        } else {
-            /**
-             * We have the file header, so assume it is a valid stand-alone
-             * file.
-             */
+				segment.setSegmentHeader(segmentHeader);
 
-            if (JBIG2StreamDecoder.debug)
-                System.out.println("==== File Header ====");
+				break;
 
-            setFileHeaderFlags();
+			case Segment.INTERMEDIATE_TEXT_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Intermediate Text Region ====");
 
-            if (JBIG2StreamDecoder.debug) {
-                System.out.println("randomAccessOrganisation = " + randomAccessOrganisation);
-                System.out.println("noOfPagesKnown = " + noOfPagesKnown);
-            }
+				segment = new TextRegionSegment(this, false);
 
-            if (noOfPagesKnown) {
-                noOfPages = getNoOfPages();
+				segment.setSegmentHeader(segmentHeader);
 
-                if (JBIG2StreamDecoder.debug)
-                    System.out.println("noOfPages = " + noOfPages);
-            }
-        }
+				break;
 
-        huffmanDecoder = new HuffmanDecoder(reader);
-        mmrDecoder = new MMRDecoder(reader);
-        arithmeticDecoder = new ArithmeticDecoder(reader);
+			case Segment.IMMEDIATE_TEXT_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Immediate Text Region ====");
 
-        /** read in the main segment data */
-        readSegments();
-    }
+				segment = new TextRegionSegment(this, true);
 
-    public HuffmanDecoder getHuffmanDecoder() {
-        return huffmanDecoder;
-    }
+				segment.setSegmentHeader(segmentHeader);
 
-    public MMRDecoder getMMRDecoder() {
-        return mmrDecoder;
-    }
+				break;
 
-    public ArithmeticDecoder getArithmeticDecoder() {
-        return arithmeticDecoder;
-    }
+			case Segment.IMMEDIATE_LOSSLESS_TEXT_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Immediate Lossless Text Region ====");
 
-    private void resetDecoder() {
-        noOfPagesKnown = false;
-        randomAccessOrganisation = false;
+				segment = new TextRegionSegment(this, true);
 
-        noOfPages = -1;
+				segment.setSegmentHeader(segmentHeader);
 
-        segments.clear();
-        bitmaps.clear();
-    }
+				break;
 
-    public void cleanupPostDecode() {
-        // Clear away everything but the page segments
-        for (Iterator it = segments.iterator(); it.hasNext(); ) {
-            Segment segment = (Segment) it.next();
-            SegmentHeader segmentHeader = segment.getSegmentHeader();
-            if (segmentHeader.getSegmentType() != Segment.PAGE_INFORMATION) {
-                it.remove();
-            }
-        }
+			case Segment.PATTERN_DICTIONARY:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Pattern Dictionary ====");
 
-        bitmaps.clear();
-    }
+				segment = new PatternDictionarySegment(this);
 
-    private void readSegments() throws IOException, JBIG2Exception {
+				segment.setSegmentHeader(segmentHeader);
 
-        if (JBIG2StreamDecoder.debug)
-            System.out.println("==== Segments ====");
+				break;
 
-        boolean finished = false;
-        while (!reader.isFinished() && !finished) {
+			case Segment.INTERMEDIATE_HALFTONE_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Intermediate Halftone Region ====");
 
-            SegmentHeader segmentHeader = new SegmentHeader();
+				segment = new HalftoneRegionSegment(this, false);
 
-            if (JBIG2StreamDecoder.debug)
-                System.out.println("==== Segment Header ====");
+				segment.setSegmentHeader(segmentHeader);
 
-            readSegmentHeader(segmentHeader);
+				break;
 
-            // read the Segment data
-            Segment segment = null;
+			case Segment.IMMEDIATE_HALFTONE_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Immediate Halftone Region ====");
 
-            int segmentType = segmentHeader.getSegmentType();
-            int[] referredToSegments = segmentHeader.getReferredToSegments();
-            int noOfReferredToSegments = segmentHeader.getReferredToSegmentCount();
+				segment = new HalftoneRegionSegment(this, true);
 
-            switch (segmentType) {
-                case Segment.SYMBOL_DICTIONARY:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Segment Symbol Dictionary ====");
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment = new SymbolDictionarySegment(this);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.IMMEDIATE_LOSSLESS_HALFTONE_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Immediate Lossless Halftone Region ====");
 
-                    break;
+				segment = new HalftoneRegionSegment(this, true);
 
-                case Segment.INTERMEDIATE_TEXT_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Intermediate Text Region ====");
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment = new TextRegionSegment(this, false);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.INTERMEDIATE_GENERIC_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Intermediate Generic Region ====");
 
-                    break;
+				segment = new GenericRegionSegment(this, false);
 
-                case Segment.IMMEDIATE_TEXT_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Immediate Text Region ====");
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment = new TextRegionSegment(this, true);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.IMMEDIATE_GENERIC_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Immediate Generic Region ====");
 
-                    break;
+				segment = new GenericRegionSegment(this, true);
 
-                case Segment.IMMEDIATE_LOSSLESS_TEXT_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Immediate Lossless Text Region ====");
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment = new TextRegionSegment(this, true);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.IMMEDIATE_LOSSLESS_GENERIC_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Immediate Lossless Generic Region ====");
 
-                    break;
+				segment = new GenericRegionSegment(this, true);
 
-                case Segment.PATTERN_DICTIONARY:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Pattern Dictionary ====");
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment = new PatternDictionarySegment(this);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.INTERMEDIATE_GENERIC_REFINEMENT_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Intermediate Generic Refinement Region ====");
 
-                    break;
+				segment = new RefinementRegionSegment(this, false, referredToSegments, noOfReferredToSegments);
 
-                case Segment.INTERMEDIATE_HALFTONE_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Intermediate Halftone Region ====");
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment = new HalftoneRegionSegment(this, false);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.IMMEDIATE_GENERIC_REFINEMENT_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Immediate Generic Refinement Region ====");
 
-                    break;
+				segment = new RefinementRegionSegment(this, true, referredToSegments, noOfReferredToSegments);
 
-                case Segment.IMMEDIATE_HALFTONE_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Immediate Halftone Region ====");
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment = new HalftoneRegionSegment(this, true);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.IMMEDIATE_LOSSLESS_GENERIC_REFINEMENT_REGION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Immediate lossless Generic Refinement Region ====");
 
-                    break;
+				segment = new RefinementRegionSegment(this, true, referredToSegments, noOfReferredToSegments);
 
-                case Segment.IMMEDIATE_LOSSLESS_HALFTONE_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Immediate Lossless Halftone Region ====");
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment = new HalftoneRegionSegment(this, true);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.PAGE_INFORMATION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Page Information Dictionary ====");
 
-                    break;
+				segment = new PageInformationSegment(this);
 
-                case Segment.INTERMEDIATE_GENERIC_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Intermediate Generic Region ====");
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment = new GenericRegionSegment(this, false);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.END_OF_PAGE:
+				continue;
 
-                    break;
+			case Segment.END_OF_STRIPE:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== End of Stripes ====");
 
-                case Segment.IMMEDIATE_GENERIC_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Immediate Generic Region ====");
+				segment = new EndOfStripeSegment(this);
 
-                    segment = new GenericRegionSegment(this, true);
+				segment.setSegmentHeader(segmentHeader);
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.END_OF_FILE:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== End of File ====");
 
-                    break;
+				finished = true;
 
-                case Segment.IMMEDIATE_LOSSLESS_GENERIC_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Immediate Lossless Generic Region ====");
+				continue;
 
-                    segment = new GenericRegionSegment(this, true);
+			case Segment.PROFILES:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("PROFILES UNIMPLEMENTED");
+				break;
 
-                    segment.setSegmentHeader(segmentHeader);
+			case Segment.TABLES:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("TABLES UNIMPLEMENTED");
+				break;
 
-                    break;
+			case Segment.EXTENSION:
+				if (JBIG2StreamDecoder.debug)
+					System.out.println("==== Extensions ====");
 
-                case Segment.INTERMEDIATE_GENERIC_REFINEMENT_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Intermediate Generic Refinement Region ====");
+				segment = new ExtensionSegment(this);
 
-                    segment = new RefinementRegionSegment(this, false, referredToSegments, noOfReferredToSegments);
+				segment.setSegmentHeader(segmentHeader);
 
-                    segment.setSegmentHeader(segmentHeader);
+				break;
 
-                    break;
+			default:
+				System.out.println("Unknown Segment type in JBIG2 stream");
 
-                case Segment.IMMEDIATE_GENERIC_REFINEMENT_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Immediate Generic Refinement Region ====");
+				break;
+			}
+			
+			if (!randomAccessOrganisation) {
+				segment.readSegment();
+			}
 
-                    segment = new RefinementRegionSegment(this, true, referredToSegments, noOfReferredToSegments);
+			segments.add(segment);
+		}
 
-                    segment.setSegmentHeader(segmentHeader);
+		if (randomAccessOrganisation) {
+			for (Iterator it = segments.iterator(); it.hasNext();) {
+				Segment segment = (Segment) it.next();
+				segment.readSegment();
+			}
+		}
+	}
 
-                    break;
+	public PageInformationSegment findPageSegement(int page) {
+		for (Iterator it = segments.iterator(); it.hasNext();) {
+			Segment segment = (Segment) it.next();
+			SegmentHeader segmentHeader = segment.getSegmentHeader();
+			if (segmentHeader.getSegmentType() == segment.PAGE_INFORMATION && segmentHeader.getPageAssociation() == page) {
+				return (PageInformationSegment) segment;
+			}
+		}
 
-                case Segment.IMMEDIATE_LOSSLESS_GENERIC_REFINEMENT_REGION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Immediate lossless Generic Refinement Region ====");
+		return null;
+	}
 
-                    segment = new RefinementRegionSegment(this, true, referredToSegments, noOfReferredToSegments);
+	public Segment findSegment(int segmentNumber) {
+		for (Iterator it = segments.iterator(); it.hasNext();) {
+			Segment segment = (Segment) it.next();
+			if (segment.getSegmentHeader().getSegmentNumber() == segmentNumber) {
+				return segment;
+			}
+		}
 
-                    segment.setSegmentHeader(segmentHeader);
+		return null;
+	}
 
-                    break;
+	private void readSegmentHeader(SegmentHeader segmentHeader) throws IOException, JBIG2Exception {
+		handleSegmentNumber(segmentHeader);
 
-                case Segment.PAGE_INFORMATION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Page Information Dictionary ====");
+		handleSegmentHeaderFlags(segmentHeader);
 
-                    segment = new PageInformationSegment(this);
+		handleSegmentReferredToCountAndRententionFlags(segmentHeader);
 
-                    segment.setSegmentHeader(segmentHeader);
+		handleReferedToSegmentNumbers(segmentHeader);
 
-                    break;
+		handlePageAssociation(segmentHeader);
 
-                case Segment.END_OF_PAGE:
-                    continue;
+		if (segmentHeader.getSegmentType() != Segment.END_OF_FILE)
+			handleSegmentDataLength(segmentHeader);
+	}
 
-                case Segment.END_OF_STRIPE:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== End of Stripes ====");
+	private void handlePageAssociation(SegmentHeader segmentHeader) throws IOException {
+		int pageAssociation;
 
-                    segment = new EndOfStripeSegment(this);
+		boolean isPageAssociationSizeSet = segmentHeader.isPageAssociationSizeSet();
+		if (isPageAssociationSizeSet) { // field is 4 bytes long
+			short[] buf = new short[4];
+			reader.readByte(buf);
+			pageAssociation = BinaryOperation.getInt32(buf);
+		} else { // field is 1 byte long
+			pageAssociation = reader.readByte();
+		}
 
-                    segment.setSegmentHeader(segmentHeader);
-                    break;
+		segmentHeader.setPageAssociation(pageAssociation);
 
-                case Segment.END_OF_FILE:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== End of File ====");
+		if (JBIG2StreamDecoder.debug)
+			System.out.println("pageAssociation = " + pageAssociation);
+	}
 
-                    finished = true;
+	private void handleSegmentNumber(SegmentHeader segmentHeader) throws IOException {
+		short[] segmentBytes = new short[4];
+		reader.readByte(segmentBytes);
 
-                    continue;
+		int segmentNumber = BinaryOperation.getInt32(segmentBytes);
 
-                case Segment.PROFILES:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("PROFILES UNIMPLEMENTED");
-                    break;
+		if (JBIG2StreamDecoder.debug)
+			System.out.println("SegmentNumber = " + segmentNumber);
+		segmentHeader.setSegmentNumber(segmentNumber);
+	}
 
-                case Segment.TABLES:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("TABLES UNIMPLEMENTED");
-                    break;
+	private void handleSegmentHeaderFlags(SegmentHeader segmentHeader) throws IOException {
+		short segmentHeaderFlags = reader.readByte();
+		// System.out.println("SegmentHeaderFlags = " + SegmentHeaderFlags);
+		segmentHeader.setSegmentHeaderFlags(segmentHeaderFlags);
+	}
 
-                case Segment.EXTENSION:
-                    if (JBIG2StreamDecoder.debug)
-                        System.out.println("==== Extensions ====");
+	private void handleSegmentReferredToCountAndRententionFlags(SegmentHeader segmentHeader) throws IOException, JBIG2Exception {
+		short referedToSegmentCountAndRetentionFlags = reader.readByte();
 
-                    segment = new ExtensionSegment(this);
+		int referredToSegmentCount = (referedToSegmentCountAndRetentionFlags & 224) >> 5; // 224
+																							// =
+																							// 11100000
 
-                    segment.setSegmentHeader(segmentHeader);
+		short[] retentionFlags = null;
+		/** take off the first three bits of the first byte */
+		short firstByte = (short) (referedToSegmentCountAndRetentionFlags & 31); // 31 =
+																					// 00011111
 
-                    break;
+		if (referredToSegmentCount <= 4) { // short form
 
-                default:
-                    System.out.println("Unknown Segment type in JBIG2 stream");
+			retentionFlags = new short[1];
+			retentionFlags[0] = firstByte;
 
-                    break;
-            }
+		} else if (referredToSegmentCount == 7) { // long form
 
-            if (!randomAccessOrganisation && segment != null) {
-                segment.readSegment();
-            }
+			short[] longFormCountAndFlags = new short[4];
+			/** add the first byte of the four */
+			longFormCountAndFlags[0] = firstByte;
 
-            if (segments != null) {
-                segments.add(segment);
-            }
-        }
+			for (int i = 1; i < 4; i++)
+				// add the next 3 bytes to the array
+				longFormCountAndFlags[i] = reader.readByte();
 
-        if (randomAccessOrganisation && segments != null) {
-            for (Object segment1 : segments) {
-                Segment segment = (Segment) segment1;
-                segment.readSegment();
-            }
-        }
-    }
+			/** get the count of the referred to Segments */
+			referredToSegmentCount = BinaryOperation.getInt32(longFormCountAndFlags);
 
-    public PageInformationSegment findPageSegement(int page) {
-        for (Object segment1 : segments) {
-            Segment segment = (Segment) segment1;
-            SegmentHeader segmentHeader = segment.getSegmentHeader();
-            if (segmentHeader.getSegmentType() == Segment.PAGE_INFORMATION && segmentHeader.getPageAssociation() == page) {
-                return (PageInformationSegment) segment;
-            }
-        }
+			/** calculate the number of bytes in this field */
+			int noOfBytesInField = (int) Math.ceil(4 + ((referredToSegmentCount + 1) / 8d));
+			// System.out.println("noOfBytesInField = " + noOfBytesInField);
 
-        return null;
-    }
+			int noOfRententionFlagBytes = noOfBytesInField - 4;
+			retentionFlags = new short[noOfRententionFlagBytes];
+			reader.readByte(retentionFlags);
 
-    public Segment findSegment(int segmentNumber) {
-        for (Object segment1 : segments) {
-            Segment segment = (Segment) segment1;
-            if (segment.getSegmentHeader().getSegmentNumber() == segmentNumber) {
-                return segment;
-            }
-        }
+		} else { // error
+			throw new JBIG2Exception("Error, 3 bit Segment count field = " + referredToSegmentCount);
+		}
 
-        return null;
-    }
+		segmentHeader.setReferredToSegmentCount(referredToSegmentCount);
 
-    private void readSegmentHeader(SegmentHeader segmentHeader) throws IOException, JBIG2Exception {
-        handleSegmentNumber(segmentHeader);
+		if (JBIG2StreamDecoder.debug)
+			System.out.println("referredToSegmentCount = " + referredToSegmentCount);
 
-        handleSegmentHeaderFlags(segmentHeader);
+		segmentHeader.setRententionFlags(retentionFlags);
 
-        handleSegmentReferredToCountAndRententionFlags(segmentHeader);
+		if (JBIG2StreamDecoder.debug)
+			System.out.print("retentionFlags = ");
 
-        handleReferedToSegmentNumbers(segmentHeader);
+		if (JBIG2StreamDecoder.debug) {
+			for (int i = 0; i < retentionFlags.length; i++)
+				System.out.print(retentionFlags[i] + " ");
+			System.out.println("");
+		}
+	}
 
-        handlePageAssociation(segmentHeader);
+	private void handleReferedToSegmentNumbers(SegmentHeader segmentHeader) throws IOException {
+		int referredToSegmentCount = segmentHeader.getReferredToSegmentCount();
+		int[] referredToSegments = new int[referredToSegmentCount];
 
-        if (segmentHeader.getSegmentType() != Segment.END_OF_FILE)
-            handleSegmentDataLength(segmentHeader);
-    }
+		int segmentNumber = segmentHeader.getSegmentNumber();
 
-    private void handlePageAssociation(SegmentHeader segmentHeader) throws IOException {
-        int pageAssociation;
+		if (segmentNumber <= 256) {
+			for (int i = 0; i < referredToSegmentCount; i++)
+				referredToSegments[i] = reader.readByte();
+		} else if (segmentNumber <= 65536) {
+			short[] buf = new short[2];
+			for (int i = 0; i < referredToSegmentCount; i++) {
+				reader.readByte(buf);
+				referredToSegments[i] = BinaryOperation.getInt16(buf);
+			}
+		} else {
+			short[] buf = new short[4];
+			for (int i = 0; i < referredToSegmentCount; i++) {
+				reader.readByte(buf);
+				referredToSegments[i] = BinaryOperation.getInt32(buf);
+			}
+		}
 
-        boolean isPageAssociationSizeSet = segmentHeader.isPageAssociationSizeSet();
-        if (isPageAssociationSizeSet) { // field is 4 bytes long
-            short[] buf = new short[4];
-            reader.readByte(buf);
-            pageAssociation = BinaryOperation.getInt32(buf);
-        } else { // field is 1 byte long
-            pageAssociation = reader.readByte();
-        }
+		segmentHeader.setReferredToSegments(referredToSegments);
 
-        segmentHeader.setPageAssociation(pageAssociation);
+		if (JBIG2StreamDecoder.debug) {
+			System.out.print("referredToSegments = ");
+			for (int i = 0; i < referredToSegments.length; i++)
+				System.out.print(referredToSegments[i] + " ");
+			System.out.println("");
+		}
+	}
 
-        if (JBIG2StreamDecoder.debug)
-            System.out.println("pageAssociation = " + pageAssociation);
-    }
+	private int getNoOfPages() throws IOException {
+		short[] noOfPages = new short[4];
+		reader.readByte(noOfPages);
 
-    private void handleSegmentNumber(SegmentHeader segmentHeader) throws IOException {
-        short[] segmentBytes = new short[4];
-        reader.readByte(segmentBytes);
+		return BinaryOperation.getInt32(noOfPages);
+	}
 
-        int segmentNumber = BinaryOperation.getInt32(segmentBytes);
+	private void handleSegmentDataLength(SegmentHeader segmentHeader) throws IOException {
+		short[] buf = new short[4];
+		reader.readByte(buf);
+		
+		int dateLength = BinaryOperation.getInt32(buf);
+		segmentHeader.setDataLength(dateLength);
 
-        if (JBIG2StreamDecoder.debug)
-            System.out.println("SegmentNumber = " + segmentNumber);
-        segmentHeader.setSegmentNumber(segmentNumber);
-    }
+		if (JBIG2StreamDecoder.debug)
+			System.out.println("dateLength = " + dateLength);
+	}
 
-    private void handleSegmentHeaderFlags(SegmentHeader segmentHeader) throws IOException {
-        short segmentHeaderFlags = reader.readByte();
-        // System.out.println("SegmentHeaderFlags = " + SegmentHeaderFlags);
-        segmentHeader.setSegmentHeaderFlags(segmentHeaderFlags);
-    }
+	private void setFileHeaderFlags() throws IOException {
+		short headerFlags = reader.readByte();
 
-    private void handleSegmentReferredToCountAndRententionFlags(SegmentHeader segmentHeader) throws IOException, JBIG2Exception {
-        short referedToSegmentCountAndRetentionFlags = reader.readByte();
+		if ((headerFlags & 0xfc) != 0) {
+			System.out.println("Warning, reserved bits (2-7) of file header flags are not zero " + headerFlags);
+		}
 
-        int referredToSegmentCount = (referedToSegmentCountAndRetentionFlags & 224) >> 5; // 224
-        // =
-        // 11100000
+		int fileOrganisation = headerFlags & 1;
+		randomAccessOrganisation = fileOrganisation == 0;
 
-        short[] retentionFlags;
-        /** take off the first three bits of the first byte */
-        short firstByte = (short) (referedToSegmentCountAndRetentionFlags & 31); // 31 =
-        // 00011111
+		int pagesKnown = headerFlags & 2;
+		noOfPagesKnown = pagesKnown == 0;
+	}
 
-        if (referredToSegmentCount <= 4) { // short form
+	private boolean checkHeader() throws IOException {
+		short[] controlHeader = new short[] { 151, 74, 66, 50, 13, 10, 26, 10 };
+		short[] actualHeader = new short[8];
+		reader.readByte(actualHeader);
 
-            retentionFlags = new short[1];
-            retentionFlags[0] = firstByte;
+		return Arrays.equals(controlHeader, actualHeader);
+	}
 
-        } else if (referredToSegmentCount == 7) { // long form
+	public int readBits(int num) throws IOException {
+		return reader.readBits(num);
+	}
 
-            short[] longFormCountAndFlags = new short[4];
-            /** add the first byte of the four */
-            longFormCountAndFlags[0] = firstByte;
+	public int readBit() throws IOException {
+		return reader.readBit();
+	}
 
-            for (int i = 1; i < 4; i++)
-                // add the next 3 bytes to the array
-                longFormCountAndFlags[i] = reader.readByte();
+	public void readByte(short[] buff) throws IOException {
+		reader.readByte(buff);
+	}
 
-            /** get the count of the referred to Segments */
-            referredToSegmentCount = BinaryOperation.getInt32(longFormCountAndFlags);
+	public void consumeRemainingBits() throws IOException {
+		reader.consumeRemainingBits();
+	}
 
-            /** calculate the number of bytes in this field */
-            int noOfBytesInField = (int) Math.ceil(4 + ((referredToSegmentCount + 1) / 8d));
-            // System.out.println("noOfBytesInField = " + noOfBytesInField);
+	public short readByte() throws java.io.IOException {
+		return reader.readByte();
+	}
 
-            int noOfRententionFlagBytes = noOfBytesInField - 4;
-            retentionFlags = new short[noOfRententionFlagBytes];
-            reader.readByte(retentionFlags);
+	public void appendBitmap(JBIG2Bitmap bitmap) {
+		bitmaps.add(bitmap);
+	}
 
-        } else { // error
-            throw new JBIG2Exception("Error, 3 bit Segment count field = " + referredToSegmentCount);
-        }
+	public JBIG2Bitmap findBitmap(int bitmapNumber) {
+		for (Iterator it = bitmaps.iterator(); it.hasNext();) {
+			JBIG2Bitmap bitmap = (JBIG2Bitmap) it.next();
+			if (bitmap.getBitmapNumber() == bitmapNumber) {
+				return bitmap;
+			}
+		}
 
-        segmentHeader.setReferredToSegmentCount(referredToSegmentCount);
+		return null;
+	}
 
-        if (JBIG2StreamDecoder.debug)
-            System.out.println("referredToSegmentCount = " + referredToSegmentCount);
+	public JBIG2Bitmap getPageAsJBIG2Bitmap(int i) {
+		JBIG2Bitmap pageBitmap = findPageSegement(1).getPageBitmap();
+		return pageBitmap;
+	}
 
-        segmentHeader.setRententionFlags(retentionFlags);
+	public boolean isNumberOfPagesKnown() {
+		return noOfPagesKnown;
+	}
 
-        if (JBIG2StreamDecoder.debug)
-            System.out.print("retentionFlags = ");
+	public int getNumberOfPages() {
+		return noOfPages;
+	}
 
-        if (JBIG2StreamDecoder.debug) {
-            for (short retentionFlag : retentionFlags)
-                System.out.print(retentionFlag + " ");
-            System.out.println("");
-        }
-    }
+	public boolean isRandomAccessOrganisationUsed() {
+		return randomAccessOrganisation;
+	}
 
-    private void handleReferedToSegmentNumbers(SegmentHeader segmentHeader) throws IOException {
-        int referredToSegmentCount = segmentHeader.getReferredToSegmentCount();
-        int[] referredToSegments = new int[referredToSegmentCount];
-
-        int segmentNumber = segmentHeader.getSegmentNumber();
-
-        if (segmentNumber <= 256) {
-            for (int i = 0; i < referredToSegmentCount; i++)
-                referredToSegments[i] = reader.readByte();
-        } else if (segmentNumber <= 65536) {
-            short[] buf = new short[2];
-            for (int i = 0; i < referredToSegmentCount; i++) {
-                reader.readByte(buf);
-                referredToSegments[i] = BinaryOperation.getInt16(buf);
-            }
-        } else {
-            short[] buf = new short[4];
-            for (int i = 0; i < referredToSegmentCount; i++) {
-                reader.readByte(buf);
-                referredToSegments[i] = BinaryOperation.getInt32(buf);
-            }
-        }
-
-        segmentHeader.setReferredToSegments(referredToSegments);
-
-        if (JBIG2StreamDecoder.debug) {
-            System.out.print("referredToSegments = ");
-            for (int referredToSegment : referredToSegments)
-                System.out.print(referredToSegment + " ");
-            System.out.println("");
-        }
-    }
-
-    private int getNoOfPages() throws IOException {
-        short[] noOfPages = new short[4];
-        reader.readByte(noOfPages);
-
-        return BinaryOperation.getInt32(noOfPages);
-    }
-
-    private void handleSegmentDataLength(SegmentHeader segmentHeader) throws IOException {
-        short[] buf = new short[4];
-        reader.readByte(buf);
-
-        int dateLength = BinaryOperation.getInt32(buf);
-        segmentHeader.setDataLength(dateLength);
-
-        if (JBIG2StreamDecoder.debug)
-            System.out.println("dateLength = " + dateLength);
-    }
-
-    private void setFileHeaderFlags() throws IOException {
-        short headerFlags = reader.readByte();
-
-        if ((headerFlags & 0xfc) != 0) {
-            System.out.println("Warning, reserved bits (2-7) of file header flags are not zero " + headerFlags);
-        }
-
-        int fileOrganisation = headerFlags & 1;
-        randomAccessOrganisation = fileOrganisation == 0;
-
-        int pagesKnown = headerFlags & 2;
-        noOfPagesKnown = pagesKnown == 0;
-    }
-
-    private boolean checkHeader() throws IOException {
-        short[] controlHeader = new short[]{151, 74, 66, 50, 13, 10, 26, 10};
-        short[] actualHeader = new short[8];
-        reader.readByte(actualHeader);
-
-        return Arrays.equals(controlHeader, actualHeader);
-    }
-
-    public int readBits(int num) throws IOException {
-        return reader.readBits(num);
-    }
-
-    public int readBit() throws IOException {
-        return reader.readBit();
-    }
-
-    public void readByte(short[] buff) throws IOException {
-        reader.readByte(buff);
-    }
-
-    public void consumeRemainingBits() throws IOException {
-        reader.consumeRemainingBits();
-    }
-
-    public short readByte() throws java.io.IOException {
-        return reader.readByte();
-    }
-
-    public void appendBitmap(JBIG2Bitmap bitmap) {
-        bitmaps.add(bitmap);
-    }
-
-    public JBIG2Bitmap findBitmap(int bitmapNumber) {
-        for (Object bitmap1 : bitmaps) {
-            JBIG2Bitmap bitmap = (JBIG2Bitmap) bitmap1;
-            if (bitmap.getBitmapNumber() == bitmapNumber) {
-                return bitmap;
-            }
-        }
-
-        return null;
-    }
-
-    public JBIG2Bitmap getPageAsJBIG2Bitmap(int i) {
-        return findPageSegement(i).getPageBitmap();
-    }
-
-    public boolean isNumberOfPagesKnown() {
-        return noOfPagesKnown;
-    }
-
-    public int getNumberOfPages() {
-        return noOfPages;
-    }
-
-    public boolean isRandomAccessOrganisationUsed() {
-        return randomAccessOrganisation;
-    }
-
-    public List getAllSegments() {
-        return segments;
-    }
+	public List getAllSegments() {
+		return segments;
+	}
 }
